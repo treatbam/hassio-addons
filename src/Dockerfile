@@ -1,17 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG FTL_SOURCE=remote
 # Pull Stable images
-FROM alpine:3.22 AS base-stable
-FROM base-stable AS base-386
-FROM base-stable AS base-amd64
-FROM base-stable AS base-arm
-FROM base-stable AS base-arm64
-# Pull Edge images
-FROM alpine:edge AS base-edge
-FROM base-edge   AS base-riscv64
-# Use the base image for the current architecture
-FROM base-${TARGETARCH} AS base
-# https://docs.docker.com/engine/reference/builder/#automatic-platform-args-in-the-global-scope
+FROM alpine:3.22 AS base
 
 ARG TARGETPLATFORM
 ARG WEB_BRANCH="development"
@@ -40,12 +30,11 @@ RUN apk add --no-cache \
     git \
     # Install grep to avoid issues in pihole -w/b with the default busybox grep
     grep \
-    iproute2-ss \
+    iproute2 \
     jq \
     libcap \
     logrotate \
     ncurses \
-    nmap-ncat \
     procps-ng \
     psmisc \
     shadow \
@@ -70,9 +59,26 @@ COPY crontab.txt /crontab.txt
 # Add PADD to the container, too.
 ADD --chmod=0755 https://raw.githubusercontent.com/${PADD_FORK}/PADD/${PADD_BRANCH}/padd.sh /usr/local/bin/padd
 
-# download a the main repos from github
-RUN git clone --depth 1 --single-branch --branch ${WEB_BRANCH} https://github.com/${WEB_FORK}/web.git /var/www/html/admin && \
-    git clone --depth 1 --single-branch --branch ${CORE_BRANCH} https://github.com/${CORE_FORK}/pi-hole.git /etc/.pihole
+# download a the main repos from github 
+# if the branch is master we clone the latest tag as sometimes the master branch contains meta changes that have not been tagged
+# (we need to create a new "master" branch to avoid the "detached HEAD" state for the version check to work correctly)                                      
+
+RUN clone_repo() { \
+        FORK="$1"; \
+        REPO="$2"; \
+        BRANCH="$3"; \
+        DEST="$4"; \
+        CLONE_BRANCH="$BRANCH"; \
+        if [ "$BRANCH" = "master" ]; then \
+            CLONE_BRANCH=$(curl -s https://api.github.com/repos/${FORK}/${REPO}/releases/latest | jq -r .tag_name); \
+        fi; \
+        git clone --branch "$CLONE_BRANCH" --single-branch --depth 1 "https://github.com/${FORK}/${REPO}.git" "$DEST"; \
+        cd "$DEST"; \
+        if [ "$BRANCH" = "master" ]; then git checkout -b master; fi; \
+    }; \
+    clone_repo "${WEB_FORK}" "web" "${WEB_BRANCH}" "/var/www/html/admin"; \
+    clone_repo "${CORE_FORK}" "pi-hole" "${CORE_BRANCH}" "/etc/.pihole"
+
 
 RUN cd /etc/.pihole && \
     install -Dm755 -d /opt/pihole && \
